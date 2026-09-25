@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Asistente No Videntes - Prototipo Sensor</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #121212;
+            color: #ffffff;
+            text-align: center;
+            padding: 20px;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            font-size: 18px;
+            border-radius: 8px;
+            cursor: pointer;
+            margin-top: 20px;
+        }
+        video {
+            width: 100%;
+            max-width: 400px;
+            border-radius: 10px;
+            margin-top: 15px;
+            border: 2px solid #4CAF50;
+        }
+        .data-box {
+            background: #1e1e1e;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 15px;
+            text-align: left;
+            font-family: monospace;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Asistente Wearable</h1>
+    <p>Coloque el celular en el arnés de pecho y presione iniciar.</p>
+
+    <button id="startBtn">Iniciar Sistema</button>
+
+    <!-- Vista previa de la cámara orientada al frente -->
+    <div>
+        <video id="cameraStream" autoplay playsinline muted></video>
+    </div>
+
+    <!-- Panel de datos de sensores en tiempo real -->
+    <div class="data-box">
+        <h3>Estado de Sensores:</h3>
+        <p id="gpsStatus">GPS: Esperando señal...</p>
+        <p id="motionStatus">Movimiento: Inactivo</p>
+    </div>
+
+    <script>
+        const startBtn = document.getElementById('startBtn');
+        const videoElement = document.getElementById('cameraStream');
+        const gpsStatus = document.getElementById('gpsStatus');
+        const motionStatus = document.getElementById('motionStatus');
+
+        // Función de Síntesis de Voz (Text-to-Speech) para feedback auditivo
+        function speak(text) {
+            if ('speechSynthesis' in window) {
+                const utterance = new SpeechSynthesisUtterance(text);
+                utterance.lang = 'es-ES';
+                utterance.rate = 1.1; // Ligeramente más rápido para mayor agilidad
+                window.speechSynthesis.speak(utterance);
+            }
+        }
+
+        startBtn.addEventListener('click', async () => {
+            speak("Iniciando sistema de asistencia. Calibrando sensores.");
+            startBtn.style.display = 'none';
+
+            // 1. Inicializar Cámara Trasera (ideal para la posición en el pecho)
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } },
+                    audio: false
+                });
+                videoElement.srcObject = stream;
+            } catch (error) {
+                console.error("Error al acceder a la cámara:", error);
+                speak("Error al acceder a la cámara.");
+            }
+
+            // 2. Inicializar Geolocalización (GPS)
+            if ("geolocation" in navigator) {
+                navigator.geolocation.watchPosition(
+                    (position) => {
+                        const lat = position.coords.latitude.toFixed(5);
+                        const lon = position.coords.longitude.toFixed(5);
+                        gpsStatus.innerText = `GPS: Lat ${lat}, Lon ${lon}`;
+                    },
+                    (error) => {
+                        gpsStatus.innerText = "GPS: Error de señal";
+                    },
+                    { enableHighAccuracy: true, maximumAge: 10000, timeout: 5000 }
+                );
+            } else {
+                gpsStatus.innerText = "GPS: No soportado por el navegador";
+            }
+
+            // 3. Inicializar Sensores de Movimiento (Giroscopio / Acelerómetro)
+            if (window.DeviceMotionEvent) {
+                window.addEventListener('devicemotion', (event) => {
+                    const acc = event.accelerationIncludingGravity;
+                    if (acc) {
+                        motionStatus.innerText = `Acelerómetro:\n X: ${acc.x?.toFixed(1)} \n Y: ${acc.y?.toFixed(1)} \n Z: ${acc.z?.toFixed(1)}`;
+                    }
+                });
+            } else {
+                motionStatus.innerText = "Sensores de movimiento no disponibles";
+            }
+        });
+    </script>
+</body>
+</html>
