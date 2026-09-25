@@ -3,88 +3,148 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Asistente No Videntes - Exploración Continua</title>
-    
+    <meta name="theme-color" content="#121212">
+    <title>Asistente Wearable para No Videntes</title>
+    <link rel="manifest" href="./manifest.webmanifest">
+
     <!-- TensorFlow.js y COCO-SSD -->
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.2/dist/coco-ssd.min.js"></script>
 
     <style>
+        :root {
+            --bg: #121212;
+            --panel: #1e1e1e;
+            --panel-alt: #262626;
+            --green: #4CAF50;
+            --blue: #2196F3;
+            --red: #f44336;
+            --text: #ffffff;
+            --muted: #d0d0d0;
+        }
+
+        * { box-sizing: border-box; }
+
         body {
             font-family: Arial, sans-serif;
-            background-color: #121212;
-            color: #ffffff;
+            background-color: var(--bg);
+            color: var(--text);
             text-align: center;
-            padding: 15px;
+            padding: 16px;
             margin: 0;
         }
+
+        h1 {
+            margin-bottom: 8px;
+            font-size: 28px;
+        }
+
+        p {
+            margin: 8px 0;
+        }
+
         button, input {
             font-size: 16px;
-            padding: 12px;
-            border-radius: 8px;
+            padding: 12px 16px;
+            border-radius: 10px;
             border: none;
             margin-top: 10px;
         }
+
         button {
-            background-color: #4CAF50;
+            background-color: var(--green);
             color: white;
             cursor: pointer;
             margin-right: 5px;
+            min-width: 150px;
         }
-        .btn-secondary {
-            background-color: #2196F3;
-        }
-        .btn-stop {
-            background-color: #f44336;
-        }
+
+        .btn-secondary { background-color: var(--blue); }
+        .btn-stop { background-color: var(--red); }
+
         input {
-            width: 80%;
-            max-width: 320px;
-            background: #2b2b2b;
+            width: min(90vw, 360px);
+            background: var(--panel-alt);
             color: white;
             border: 1px solid #444;
             display: block;
-            margin: 10px auto;
+            margin: 12px auto;
             text-align: center;
         }
+
+        .controls {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 8px;
+            margin: 18px 0;
+        }
+
         .video-container {
             position: relative;
             display: inline-block;
-            margin-top: 10px;
+            margin-top: 12px;
+            width: min(100%, 420px);
         }
+
         video {
             width: 100%;
-            max-width: 360px;
             border-radius: 10px;
-            border: 2px solid #4CAF50;
+            border: 2px solid var(--green);
             display: block;
             margin: 0 auto;
+            background: #000;
         }
+
         .data-box {
-            background: #1e1e1e;
-            padding: 12px;
-            border-radius: 8px;
-            margin-top: 10px;
+            background: var(--panel);
+            padding: 14px 16px;
+            border-radius: 10px;
+            margin-top: 14px;
             text-align: left;
             font-family: monospace;
             font-size: 13px;
+            line-height: 1.5;
+        }
+
+        .sr-only {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+            border: 0;
+        }
+
+        .status-pill {
+            display: inline-block;
+            background: rgba(76, 175, 80, 0.2);
+            border: 1px solid rgba(76, 175, 80, 0.6);
+            border-radius: 999px;
+            padding: 6px 12px;
+            margin-top: 8px;
         }
     </style>
 </head>
 <body>
-
     <h1>Asistente Wearable</h1>
-    <p id="loadingText">Cargando sistema de sensores...</p>
+    <p id="loadingText">Inicializando sensores y voz...</p>
+    <div class="status-pill" id="voiceState">Voz: desactivada</div>
+
+    <div class="sr-only" aria-live="polite" id="srStatus">Sistema listo</div>
 
     <div>
         <input type="text" id="destinationInput" placeholder="Ingrese destino (ej. San Martín 2500)">
         <button id="setRouteBtn" class="btn-secondary">Establecer Ruta</button>
     </div>
 
-    <div>
-        <button id="startBtn" style="display:none;">Iniciar Marcha</button>
-        <button id="exploreBtn" class="btn-secondary" style="display:none;">Explorar Entorno (Continuo)</button>
-        <button id="stopBtn" class="btn-stop" style="display:none;">Detener Todo</button>
+    <div class="controls">
+        <button id="listenBtn">Activar Voz</button>
+        <button id="startBtn">Iniciar Marcha</button>
+        <button id="exploreBtn" class="btn-secondary">Explorar Entorno</button>
+        <button id="stopBtn" class="btn-stop">Detener</button>
     </div>
 
     <div class="video-container">
@@ -96,6 +156,7 @@
         <p id="modeStatus">Modo: En espera</p>
         <p id="routeStatus">Ruta: Sin destino activo</p>
         <p id="aiStatus">IA: Lista</p>
+        <p id="lastCommandStatus">Último comando: ninguno</p>
     </div>
 
     <script>
@@ -103,20 +164,42 @@
         const exploreBtn = document.getElementById('exploreBtn');
         const stopBtn = document.getElementById('stopBtn');
         const setRouteBtn = document.getElementById('setRouteBtn');
+        const listenBtn = document.getElementById('listenBtn');
         const destinationInput = document.getElementById('destinationInput');
         const loadingText = document.getElementById('loadingText');
+        const voiceState = document.getElementById('voiceState');
+        const srStatus = document.getElementById('srStatus');
         const videoElement = document.getElementById('cameraStream');
         const aiStatus = document.getElementById('aiStatus');
         const modeStatus = document.getElementById('modeStatus');
         const routeStatus = document.getElementById('routeStatus');
+        const lastCommandStatus = document.getElementById('lastCommandStatus');
+
+        const appState = {
+            mode: 'WAITING',
+            routeActive: false,
+            destination: '',
+            lastInstruction: '',
+            lastDetectedObject: '',
+            voiceEnabled: false,
+            lastVoiceCommand: '',
+            sceneSummary: 'Sin información visual disponible.'
+        };
 
         let cocoModel = null;
         let audioCtx = null;
-        let currentMode = "IDLE"; // "IDLE", "WALKING", "EXPLORING"
+        let recognition = null;
         let lastAlertTime = 0;
-        let lastSpokenExploreObject = "";
+        let lastSpokenExploreObject = '';
         let currentPosition = null;
-        let targetDestination = "";
+        let lastRoutePromptTime = 0;
+        let lastSpoken = '';
+
+        function vibrate(pattern) {
+            if ('vibrate' in navigator) {
+                navigator.vibrate(pattern);
+            }
+        }
 
         function initAudioContext() {
             if (!audioCtx) {
@@ -130,8 +213,10 @@
         function playDistinctSpatialAlert(pan = 0.0) {
             if (!audioCtx) return;
             const isLeft = pan < 0;
-            const freq = isLeft ? 440 : 880; 
-            
+            const freq = isLeft ? 440 : 880;
+
+            vibrate(isLeft ? [40, 60, 90] : [30, 40]);
+
             if (!isLeft) {
                 playTone(freq, pan, 0.0, 0.08);
                 setTimeout(() => playTone(freq, pan, 0.0, 0.08), 120);
@@ -165,12 +250,235 @@
         }
 
         function speak(text, force = false) {
-            if ('speechSynthesis' in window) {
-                if (force) window.speechSynthesis.cancel();
-                const utterance = new SpeechSynthesisUtterance(text);
-                utterance.lang = 'es-ES';
-                utterance.rate = 1.2;
-                window.speechSynthesis.speak(utterance);
+            if (!('speechSynthesis' in window)) return;
+            if (force) window.speechSynthesis.cancel();
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.lang = 'es-ES';
+            utterance.rate = 1.15;
+            utterance.pitch = 1.0;
+            lastSpoken = text;
+            appState.lastInstruction = text;
+            window.speechSynthesis.speak(utterance);
+        }
+
+        function updateVoiceStatus(active) {
+            appState.voiceEnabled = active;
+            voiceState.textContent = active ? 'Voz: activa' : 'Voz: desactivada';
+            voiceState.style.background = active ? 'rgba(76, 175, 80, 0.18)' : 'rgba(255,255,255,0.08)';
+        }
+
+        function setLastCommand(text) {
+            appState.lastVoiceCommand = text;
+            lastCommandStatus.textContent = `Último comando: ${text}`;
+            srStatus.textContent = text;
+        }
+
+        function setMode(modeText) {
+            appState.mode = modeText;
+            modeStatus.textContent = `Modo: ${modeText}`;
+        }
+
+        function setDestination(dest) {
+            appState.destination = dest;
+            appState.routeActive = true;
+            routeStatus.textContent = `Ruta: ${dest}`;
+            speak(`Ruta establecida hacia ${dest}.`);
+            setLastCommand(`Ruta hacia ${dest}`);
+        }
+
+        function stopAssistant() {
+            appState.routeActive = false;
+            appState.mode = 'STOPPED';
+            modeStatus.textContent = 'Modo: Detenido';
+            if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+            speak('Sistema en pausa.', true);
+            setLastCommand('Detener');
+        }
+
+        function startWalkingMode() {
+            initAudioContext();
+            startCamera();
+            appState.routeActive = Boolean(appState.destination);
+            appState.mode = 'NAVIGATING';
+            modeStatus.textContent = 'Modo: Marcha y Ruta Activa';
+            speak('Modo marcha activado.', true);
+            setLastCommand('Iniciar marcha');
+            mainLoop();
+        }
+
+        function startExploringMode() {
+            initAudioContext();
+            startCamera();
+            appState.mode = 'EXPLORING';
+            modeStatus.textContent = 'Modo: Exploración Continua';
+            lastSpokenExploreObject = '';
+            speak('Modo exploración continua activado. Mueva la cámara lentamente.', true);
+            setLastCommand('Explorar entorno');
+            mainLoop();
+        }
+
+        function answerLocation() {
+            if (currentPosition) {
+                speak(`Ubicación aproximada: latitud ${currentPosition.lat.toFixed(5)}, longitud ${currentPosition.lon.toFixed(5)}.`);
+            } else {
+                speak('Todavía no tengo una ubicación precisa. Intente activar el GPS o espere un momento.');
+            }
+        }
+
+        function askAboutEnvironment() {
+            const narrative = appState.sceneSummary || 'No se detectan objetos importantes en este momento.';
+            if (appState.mode === 'WAITING' || appState.mode === 'STOPPED') {
+                speak('El sistema está en espera. Puede iniciar marcha o explorar el entorno.');
+                return;
+            }
+            speak(`${narrative} ${appState.routeActive ? 'La ruta está activa.' : 'No hay ruta activa.'}`);
+        }
+
+        function extractDestination(text) {
+            return text
+                .replace(/^(asistente|ayuda|por favor|quiero ir a|ir a|ruta a|destino a|destino )/i, '')
+                .replace(/\s+/g, ' ')
+                .trim();
+        }
+
+        function handleVoiceCommand(command) {
+            const normalized = command.toLowerCase().trim();
+            if (!normalized) return;
+
+            setLastCommand(command);
+
+            if (/iniciar marcha|comenzar marcha|caminar|marcha/.test(normalized)) {
+                startWalkingMode();
+                return;
+            }
+
+            if (/explorar|observar|reconocer|qué hay alrededor|que hay alrededor/.test(normalized)) {
+                startExploringMode();
+                return;
+            }
+
+            if (/detener|pausar|alto|basta/.test(normalized)) {
+                stopAssistant();
+                return;
+            }
+
+            if (/ir a|ruta a|destino|quiero ir a/.test(normalized)) {
+                const dest = extractDestination(normalized);
+                if (dest) {
+                    setDestination(dest);
+                } else {
+                    speak('No entendí el destino. Repítalo por favor.');
+                }
+                return;
+            }
+
+            if (/dónde estoy|donde estoy|ubicación|localización/.test(normalized)) {
+                answerLocation();
+                return;
+            }
+
+            if (/qué hay|que hay|adelante|frente|izquierda|derecha|hay gente|hay salida|salida cercana/.test(normalized)) {
+                askAboutEnvironment();
+                return;
+            }
+
+            if (/repetir|repita|dilo otra vez|repite/.test(normalized)) {
+                speak(lastSpoken || 'No hay una instrucción reciente.');
+                return;
+            }
+
+            if (/ayuda|comandos|menu/.test(normalized)) {
+                speak('Puedes decir iniciar marcha, explorar entorno, detener, ir a un destino, dónde estoy o qué hay delante.');
+                return;
+            }
+
+            speak('No entendí la instrucción. Intente decir iniciar marcha, explorar entorno, ir a un destino o preguntar qué hay delante.');
+        }
+
+        function buildSceneSummary(predictions) {
+            if (!predictions || predictions.length === 0) {
+                return 'No hay objetos importantes detectados frente a usted.';
+            }
+
+            const top = predictions
+                .filter(p => p.score > 0.55)
+                .sort((a, b) => b.score - a.score)[0];
+
+            if (!top) {
+                return 'No hay objetos importantes detectados frente a usted.';
+            }
+
+            const translated = translateClass(top.class);
+            const videoWidth = videoElement.videoWidth || 640;
+            const objectX = top.bbox[0] + (top.bbox[2] / 2);
+            const normalized = (objectX / videoWidth) * 2 - 1;
+            const side = normalized < -0.25 ? 'a la izquierda' : normalized > 0.25 ? 'a la derecha' : 'al frente';
+
+            appState.lastDetectedObject = translated;
+            return `Hay ${translated.toLowerCase()} ${side}.`;
+        }
+
+        function initSpeechRecognition() {
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (!SpeechRecognition) {
+                listenBtn.disabled = true;
+                listenBtn.textContent = 'Voz no disponible';
+                return;
+            }
+
+            recognition = new SpeechRecognition();
+            recognition.lang = 'es-AR';
+            recognition.continuous = true;
+            recognition.interimResults = false;
+
+            recognition.onresult = (event) => {
+                const transcript = event.results[event.results.length - 1][0].transcript;
+                const cleaned = transcript.trim();
+                if (cleaned) {
+                    handleVoiceCommand(cleaned);
+                }
+            };
+
+            recognition.onerror = (event) => {
+                console.warn('Speech recognition error:', event.error);
+                if (event.error !== 'no-speech') {
+                    speak('No pude escuchar bien. Inténtelo nuevamente.');
+                }
+            };
+
+            recognition.onend = () => {
+                if (recognition && appState.voiceEnabled) {
+                    try {
+                        recognition.start();
+                    } catch (e) {
+                        console.warn('No se pudo reiniciar reconocimiento:', e);
+                    }
+                }
+            };
+
+            updateVoiceStatus(false);
+        }
+
+        function toggleVoiceCapture() {
+            if (!recognition) {
+                speak('La voz aún no está disponible en este navegador.');
+                return;
+            }
+
+            try {
+                if (appState.voiceEnabled) {
+                    recognition.stop();
+                    updateVoiceStatus(false);
+                    speak('Asistente de voz detenido.');
+                    return;
+                }
+
+                recognition.start();
+                updateVoiceStatus(true);
+                speak('Asistente de voz activado.', true);
+                setLastCommand('Voz activada');
+            } catch (error) {
+                console.warn('Speech start error:', error);
             }
         }
 
@@ -178,17 +486,15 @@
             try {
                 await tf.ready();
                 cocoModel = await cocoSsd.load();
-                loadingText.innerText = "Sistema preparado.";
-                startBtn.style.display = 'inline-block';
-                exploreBtn.style.display = 'inline-block';
-                stopBtn.style.display = 'inline-block';
-                speak("Sistema listo. Seleccione modo marcha o exploración continua.");
+                loadingText.textContent = 'Sistema preparado. Puedes usar voz o tocar los controles.';
+                speak('Sistema listo. Puedes decir iniciar marcha, explorar entorno o detener.', true);
+                initSpeechRecognition();
             } catch (error) {
-                loadingText.innerText = "Error al iniciar modelos.";
+                console.error(error);
+                loadingText.textContent = 'Error al iniciar modelos, pero la PWA sigue funcionando como asistente básico.';
+                initSpeechRecognition();
             }
         }
-
-        initSystem();
 
         async function startCamera() {
             try {
@@ -200,72 +506,58 @@
                     videoElement.srcObject = stream;
                 }
             } catch (e) {
-                console.error("Error de cámara", e);
+                console.error('Error de cámara', e);
+                speak('No se pudo acceder a la cámara.');
             }
         }
+
+        listenBtn.addEventListener('click', () => {
+            initAudioContext();
+            toggleVoiceCapture();
+        });
 
         setRouteBtn.addEventListener('click', () => {
             const dest = destinationInput.value.trim();
             if (dest) {
-                targetDestination = dest;
-                routeStatus.innerText = `Destino: ${dest}`;
-                speak(`Ruta establecida hacia ${dest}.`);
+                setDestination(dest);
             } else {
-                speak("Por favor, ingrese un destino válido.");
+                speak('Por favor, ingrese un destino válido.');
             }
         });
 
-        if ("geolocation" in navigator) {
+        startBtn.addEventListener('click', startWalkingMode);
+        exploreBtn.addEventListener('click', startExploringMode);
+        stopBtn.addEventListener('click', stopAssistant);
+
+        if ('geolocation' in navigator) {
             navigator.geolocation.watchPosition(
                 (position) => {
-                    currentPosition = { lat: position.coords.latitude, lon: position.coords.longitude };
+                    currentPosition = {
+                        lat: position.coords.latitude,
+                        lon: position.coords.longitude,
+                    };
+
+                    if (appState.routeActive && Date.now() - lastRoutePromptTime > 18000) {
+                        speak('Ruta activa. Siga la dirección indicada y manténgase en la trayectoria esperada.');
+                        lastRoutePromptTime = Date.now();
+                    }
                 },
-                (error) => { console.error("GPS error", error); },
+                (error) => {
+                    console.error('GPS error:', error);
+                },
                 { enableHighAccuracy: true, maximumAge: 10000, timeout: 5000 }
             );
         }
 
-        // Botón Detener Todo
-        stopBtn.addEventListener('click', () => {
-            currentMode = "IDLE";
-            modeStatus.innerText = "Modo: Detenido";
-            window.speechSynthesis.cancel();
-            speak("Sistema en pausa.", true);
-        });
-
-        // 1. MODO MARCHA
-        startBtn.addEventListener('click', async () => {
-            initAudioContext();
-            await startCamera();
-            currentMode = "WALKING";
-            modeStatus.innerText = "Modo: Marcha y Ruta Activa";
-            speak("Modo marcha activado.", true);
-
-            mainLoop();
-        });
-
-        // 2. MODO EXPLORACIÓN CONTINUA
-        exploreBtn.addEventListener('click', async () => {
-            initAudioContext();
-            await startCamera();
-            currentMode = "EXPLORING";
-            modeStatus.innerText = "Modo: Exploración Continua";
-            lastSpokenExploreObject = "";
-            speak("Modo exploración continua activado. Mueva la cámara lentamente.", true);
-
-            mainLoop();
-        });
-
-        // Bucle centralizador de inteligencia artificial según el modo activo
         async function mainLoop() {
-            if (currentMode === "IDLE") return;
+            if (appState.mode === 'WAITING' || appState.mode === 'STOPPED') return;
 
             if (cocoModel && videoElement.readyState === 4) {
                 try {
                     const predictions = await cocoModel.detect(videoElement);
+                    appState.sceneSummary = buildSceneSummary(predictions);
 
-                    if (currentMode === "WALKING") {
-                        // Lógica de obstáculos para marcha
+                    if (appState.mode === 'NAVIGATING') {
                         const relevantObstacles = predictions.filter(p => p.score > 0.55);
                         if (relevantObstacles.length > 0) {
                             const closest = relevantObstacles.reduce((prev, curr) => (prev.bbox[1] > curr.bbox[1]) ? prev : curr);
@@ -276,63 +568,75 @@
                             const now = Date.now();
                             if (now - lastAlertTime > 1200) {
                                 playDistinctSpatialAlert(normalizedPan);
-                                if (normalizedPan < -0.25) speak("Desviar a la derecha");
-                                else if (normalizedPan > 0.25) speak("Desviar a la izquierda");
-                                else speak("Obstáculo al frente");
+                                if (normalizedPan < -0.25) speak('Desviar a la derecha');
+                                else if (normalizedPan > 0.25) speak('Desviar a la izquierda');
+                                else speak('Obstáculo al frente');
                                 lastAlertTime = now;
                             }
-                            aiStatus.innerText = `Obstáculo (${normalizedPan < 0 ? 'Izquierda' : 'Derecha'})`;
+
+                            aiStatus.textContent = `Obstáculo (${normalizedPan < 0 ? 'Izquierda' : 'Derecha'})`;
                         } else {
-                            aiStatus.innerText = "Camino despejado";
+                            aiStatus.textContent = 'Camino despejado';
                         }
-                    } 
-                    else if (currentMode === "EXPLORING") {
-                        // Lógica de exploración continua
+                    }
+
+                    if (appState.mode === 'EXPLORING') {
                         if (predictions.length > 0) {
                             const top = predictions.reduce((prev, current) => (prev.score > current.score) ? prev : current);
                             if (top.score > 0.60) {
                                 const translated = translateClass(top.class);
-                                
                                 const videoWidth = videoElement.videoWidth || 640;
                                 const objectX = top.bbox[0] + (top.bbox[2] / 2);
                                 const pan = (objectX / videoWidth) * 2 - 1;
 
-                                // Si el objeto detectado cambia respecto al anterior que se nombró, avisa de inmediato
                                 if (translated !== lastSpokenExploreObject) {
                                     playDistinctSpatialAlert(pan);
                                     speak(translated);
                                     lastSpokenExploreObject = translated;
                                 }
-                                aiStatus.innerText = `Explorando: ${translated}`;
+
+                                aiStatus.textContent = `Explorando: ${translated}`;
                             }
                         } else {
-                            aiStatus.innerText = "Explorando: Buscando objetos...";
-                            lastSpokenExploreObject = ""; // Resetea para cuando aparezca algo nuevo
+                            aiStatus.textContent = 'Explorando: buscando objetos...';
+                            lastSpokenExploreObject = '';
                         }
                     }
                 } catch (err) {
-                    console.error("Error en bucle de IA:", err);
+                    console.error('Error en bucle IA:', err);
                 }
             }
 
-            // Continuar el bucle según el estado actual
-            if (currentMode !== "IDLE") {
-                setTimeout(mainLoop, currentMode === "WALKING" ? 500 : 1000);
+            if (appState.mode !== 'WAITING' && appState.mode !== 'STOPPED') {
+                setTimeout(mainLoop, appState.mode === 'NAVIGATING' ? 500 : 1000);
             }
         }
 
         function translateClass(className) {
             const translations = {
-                'person': 'Persona',
-                'bicycle': 'Bicicleta',
-                'car': 'Auto',
-                'chair': 'Silla',
+                person: 'Persona',
+                bicycle: 'Bicicleta',
+                car: 'Auto',
+                chair: 'Silla',
                 'potted plant': 'Planta',
-                'backpack': 'Mochila o bulto',
-                'dog': 'Perro'
+                backpack: 'Mochila o bulto',
+                dog: 'Perro',
+                'stop sign': 'Señal de alto',
+                'traffic light': 'Semáforo',
+                bench: 'Banco'
             };
             return translations[className] || className;
         }
+
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('./sw.js').catch((error) => {
+                    console.warn('Service worker no registrado:', error);
+                });
+            });
+        }
+
+        initSystem();
     </script>
 </body>
 </html>
