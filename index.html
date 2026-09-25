@@ -3,14 +3,20 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Asistente No Videntes - Prototipo Sensor</title>
+    <title>Asistente No Videntes - IA Local</title>
+    
+    <!-- Importar TensorFlow.js y el modelo COCO-SSD para visión por computadora -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+
     <style>
         body {
             font-family: Arial, sans-serif;
             background-color: #121212;
             color: #ffffff;
             text-align: center;
-            padding: 20px;
+            padding: 15px;
+            margin: 0;
         }
         button {
             background-color: #4CAF50;
@@ -20,129 +26,181 @@
             font-size: 18px;
             border-radius: 8px;
             cursor: pointer;
-            margin-top: 20px;
+            margin-top: 15px;
+        }
+        .video-container {
+            position: relative;
+            display: inline-block;
+            margin-top: 10px;
         }
         video {
             width: 100%;
-            max-width: 400px;
+            max-width: 360px;
             border-radius: 10px;
-            margin-top: 15px;
             border: 2px solid #4CAF50;
+            display: block;
+            margin: 0 auto;
         }
         .data-box {
             background: #1e1e1e;
-            padding: 15px;
+            padding: 12px;
             border-radius: 8px;
-            margin-top: 15px;
+            margin-top: 10px;
             text-align: left;
             font-family: monospace;
+            font-size: 14px;
         }
     </style>
 </head>
 <body>
 
-    <h1>Asistente Wearable</h1>
-    <p>Coloque el celular en el arnés de pecho y presione iniciar.</p>
+    <h1>Asistente Wearable (IA)</h1>
+    <p id="loadingText">Cargando modelo de inteligencia artificial...</p>
 
-    <button id="startBtn">Iniciar Sistema</button>
+    <button id="startBtn" style="display:none;">Iniciar Sistema y Cámara</button>
 
-    <!-- Vista previa de la cámara orientada al frente -->
-    <div>
+    <!-- Vista de la cámara montada en el pecho -->
+    <div class="video-container">
         <video id="cameraStream" autoplay playsinline muted></video>
     </div>
 
-    <!-- Panel de datos de sensores en tiempo real -->
+    <!-- Panel de telemetría y detección -->
     <div class="data-box">
-        <h3>Estado de Sensores:</h3>
-        <p id="gpsStatus">GPS: Esperando señal...</p>
+        <h3>Estado del Sistema:</h3>
+        <p id="aiStatus">IA: Esperando inicio...</p>
+        <p id="gpsStatus">GPS: Buscando señal...</p>
         <p id="motionStatus">Movimiento: Inactivo</p>
     </div>
 
-<script>
-    const startBtn = document.getElementById('startBtn');
-    const videoElement = document.getElementById('cameraStream');
-    const gpsStatus = document.getElementById('gpsStatus');
-    const motionStatus = document.getElementById('motionStatus');
+    <script>
+        const startBtn = document.getElementById('startBtn');
+        const loadingText = document.getElementById('loadingText');
+        const videoElement = document.getElementById('cameraStream');
+        const gpsStatus = document.getElementById('gpsStatus');
+        const motionStatus = document.getElementById('motionStatus');
+        const aiStatus = document.getElementById('aiStatus');
 
-    let lastSpeechTime = 0;
+        let cocoModel = null;
+        let lastSpeechTime = 0;
+        let isRunning = false;
 
-    // Función de Síntesis de Voz inteligente (evita saturar el audio si se llama muy seguido)
-    function speak(text, force = false) {
-        if ('speechSynthesis' in window) {
-            const now = Date.now();
-            // Si no es forzado, espera al menos 6 segundos entre mensajes automáticos
-            if (!force && (now - lastSpeechTime < 6000)) return;
+        // Función de Síntesis de Voz inteligente
+        function speak(text, force = false) {
+            if ('speechSynthesis' in window) {
+                const now = Date.now();
+                if (!force && (now - lastSpeechTime < 5000)) return; // Evita saturar el audio (filtro de 5s)
 
-            window.speechSynthesis.cancel(); // Detiene lo anterior para dar prioridad al nuevo mensaje
-            const utterance = new SpeechSynthesisUtterance(text);
-            utterance.lang = 'es-ES';
-            utterance.rate = 1.1;
-            window.speechSynthesis.speak(utterance);
-            lastSpeechTime = Date.now();
-        }
-    }
-
-    startBtn.addEventListener('click', async () => {
-        speak("Iniciando sistema de asistencia. Sensores activos.", true);
-        startBtn.style.display = 'none';
-
-        // 1. Inicializar Cámara Trasera en el pecho
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({
-                video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } },
-                audio: false
-            });
-            videoElement.srcObject = stream;
-        } catch (error) {
-            console.error("Error al acceder a la cámara:", error);
-            speak("Error al acceder a la cámara.", true);
+                window.speechSynthesis.cancel();
+                const utterance = new SpeechSynthesisUtterance(text);
+                utterance.lang = 'es-ES';
+                utterance.rate = 1.1;
+                window.speechSynthesis.speak(utterance);
+                lastSpeechTime = Date.now();
+            }
         }
 
-        // 2. Inicializar Geolocalización (GPS)
-        if ("geolocation" in navigator) {
-            navigator.geolocation.watchPosition(
-                (position) => {
-                    const lat = position.coords.latitude.toFixed(5);
-                    const lon = position.coords.longitude.toFixed(5);
-                    gpsStatus.innerText = `GPS: Lat ${lat}, Lon ${lon}`;
-                },
-                (error) => {
-                    gpsStatus.innerText = "GPS: Error de señal";
-                },
-                { enableHighAccuracy: true, maximumAge: 10000, timeout: 5000 }
-            );
-        } else {
-            gpsStatus.innerText = "GPS: No soportado";
-        }
+        // 1. Cargar el modelo de IA al iniciar la página de forma totalmente autónoma
+        async.loadModel = async function() {
+            try {
+                aiStatus.innerText = "IA: Descargando modelo ligero...";
+                cocoModel = await cocoSsd.load();
+                loadingText.innerText = "¡Modelo de IA listo!";
+                aiStatus.innerText = "IA: Modelo cargado con éxito.";
+                startBtn.style.display = 'inline-block';
+                speak("Sistema listo. Coloque el celular en el arnés y presione iniciar.");
+            } catch (error) {
+                console.error("Error al cargar la IA:", error);
+                aiStatus.innerText = "IA: Error al cargar el modelo.";
+            }
+        };
+        async.loadModel();
 
-        // 3. Inicializar Detección de Movimiento / Marcha Básica
-        if (window.DeviceMotionEvent) {
-            let stepCount = 0;
-            let lastMagnitude = 0;
+        startBtn.addEventListener('click', async () => {
+            startBtn.style.display = 'none';
+            loadingText.style.display = 'none';
+            isRunning = true;
+            speak("Iniciando sensores y visión artificial.", true);
 
-            window.addEventListener('devicemotion', (event) => {
-                const acc = event.accelerationIncludingGravity;
-                if (acc && acc.x !== null) {
-                    motionStatus.innerText = `Acelerómetro:\n X: ${acc.x.toFixed(1)} \n Y: ${acc.y.toFixed(1)} \n Z: ${acc.z.toFixed(1)}`;
+            // 2. Inicializar Cámara Trasera (vista frontal desde el pecho)
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } },
+                    audio: false
+                });
+                videoElement.srcObject = stream;
+            } catch (error) {
+                console.error("Error al acceder a la cámara:", error);
+                speak("Error al acceder a la cámara.", true);
+            }
 
-                    // Cálculo simple de magnitud de movimiento para detectar pasos con el celular en el pecho
-                    const magnitude = Math.sqrt(acc.x**2 + acc.y**2 + acc.z**2);
-                    const delta = Math.abs(magnitude - lastMagnitude);
+            // 3. Inicializar GPS
+            if ("geolocation" in navigator) {
+                navigator.geolocation.watchPosition(
+                    (position) => {
+                        const lat = position.coords.latitude.toFixed(5);
+                        const lon = position.coords.longitude.toFixed(5);
+                        gpsStatus.innerText = `GPS: Lat ${lat}, Lon ${lon}`;
+                    },
+                    (error) => { gpsStatus.innerText = "GPS: Sin señal"; },
+                    { enableHighAccuracy: true, maximumAge: 10000, timeout: 5000 }
+                );
+            }
 
-                    // Umbral simple de aceleración al caminar
-                    if (delta > 2.5) {
-                        stepCount++;
-                        if (stepCount % 10 === 0) { // Cada 10 pasos da un reporte de estado simulado
-                            speak("Caminando con normalidad. Ruta despejada al frente.");
+            // 4. Bucle principal de Visión Artificial (Inferencia en tiempo real)
+            detectObjectsLoop();
+        });
+
+        // Bucle continuo que analiza los fotogramas de la cámara con IA
+        async function detectObjectsLoop() {
+            if (!isRunning) return;
+
+            if (cocoModel && videoElement.readyState === 4) {
+                try {
+                    const predictions = await cocoModel.detect(videoElement);
+                    
+                    if (predictions.length > 0) {
+                        // Tomamos el objeto con mayor nivel de confianza detectado
+                        const topPrediction = predictions.reduce((prev, current) => 
+                            (prev.score > current.score) ? prev : current
+                        );
+
+                        if (topPrediction.score > 0.65) { // Umbral de certeza del 65%
+                            let translatedName = translateClass(topPrediction.class);
+                            aiStatus.innerText = `IA: Detectado -> ${translatedName} (${Math.round(topPrediction.score * 100)}%)`;
+                            
+                            // Emitir alerta auditiva inteligente de lo que ve el pecho
+                            speak(`Atención: ${translatedName} al frente.`);
                         }
+                    } else {
+                        aiStatus.innerText = "IA: Entorno despejado";
                     }
-                    lastMagnitude = magnitude;
+                } catch (err) {
+                    console.error("Error en inferencia de IA:", err);
                 }
-            });
-        } else {
-            motionStatus.innerText = "Sensores de movimiento no disponibles";
+            }
+
+            // Repetir el análisis cada 1.5 segundos para no sobrecalentar el procesador móvil
+            setTimeout(detectObjectsLoop, 1500);
         }
-    });
-</script>
+
+        // Traductor rápido de las clases principales del modelo al español
+        function translateClass(className) {
+            const translations = {
+                'person': 'persona',
+                'bicycle': 'bicicleta',
+                'car': 'auto',
+                'motorcycle': 'moto',
+                'bus': 'colectivo',
+                'truck': 'camión',
+                'chair': 'silla',
+                'couch': 'sillón',
+                'potted plant': 'planta o tronco',
+                'dog': 'perro',
+                'cat': 'gato',
+                'backpack': 'mochila'
+            };
+            return translations[className] || className;
+        }
+    </script>
 </body>
 </html>
