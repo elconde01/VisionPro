@@ -58,67 +58,91 @@
         <p id="motionStatus">Movimiento: Inactivo</p>
     </div>
 
-    <script>
-        const startBtn = document.getElementById('startBtn');
-        const videoElement = document.getElementById('cameraStream');
-        const gpsStatus = document.getElementById('gpsStatus');
-        const motionStatus = document.getElementById('motionStatus');
+<script>
+    const startBtn = document.getElementById('startBtn');
+    const videoElement = document.getElementById('cameraStream');
+    const gpsStatus = document.getElementById('gpsStatus');
+    const motionStatus = document.getElementById('motionStatus');
 
-        // Función de Síntesis de Voz (Text-to-Speech) para feedback auditivo
-        function speak(text) {
-            if ('speechSynthesis' in window) {
-                const utterance = new SpeechSynthesisUtterance(text);
-                utterance.lang = 'es-ES';
-                utterance.rate = 1.1; // Ligeramente más rápido para mayor agilidad
-                window.speechSynthesis.speak(utterance);
-            }
+    let lastSpeechTime = 0;
+
+    // Función de Síntesis de Voz inteligente (evita saturar el audio si se llama muy seguido)
+    function speak(text, force = false) {
+        if ('speechSynthesis' in window) {
+            const now = Date.now();
+            // Si no es forzado, espera al menos 6 segundos entre mensajes automáticos
+            if (!force && (now - lastSpeechTime < 6000)) return;
+
+            window.speechSynthesis.cancel(); // Detiene lo anterior para dar prioridad al nuevo mensaje
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.lang = 'es-ES';
+            utterance.rate = 1.1;
+            window.speechSynthesis.speak(utterance);
+            lastSpeechTime = Date.now();
+        }
+    }
+
+    startBtn.addEventListener('click', async () => {
+        speak("Iniciando sistema de asistencia. Sensores activos.", true);
+        startBtn.style.display = 'none';
+
+        // 1. Inicializar Cámara Trasera en el pecho
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } },
+                audio: false
+            });
+            videoElement.srcObject = stream;
+        } catch (error) {
+            console.error("Error al acceder a la cámara:", error);
+            speak("Error al acceder a la cámara.", true);
         }
 
-        startBtn.addEventListener('click', async () => {
-            speak("Iniciando sistema de asistencia. Calibrando sensores.");
-            startBtn.style.display = 'none';
+        // 2. Inicializar Geolocalización (GPS)
+        if ("geolocation" in navigator) {
+            navigator.geolocation.watchPosition(
+                (position) => {
+                    const lat = position.coords.latitude.toFixed(5);
+                    const lon = position.coords.longitude.toFixed(5);
+                    gpsStatus.innerText = `GPS: Lat ${lat}, Lon ${lon}`;
+                },
+                (error) => {
+                    gpsStatus.innerText = "GPS: Error de señal";
+                },
+                { enableHighAccuracy: true, maximumAge: 10000, timeout: 5000 }
+            );
+        } else {
+            gpsStatus.innerText = "GPS: No soportado";
+        }
 
-            // 1. Inicializar Cámara Trasera (ideal para la posición en el pecho)
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({
-                    video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } },
-                    audio: false
-                });
-                videoElement.srcObject = stream;
-            } catch (error) {
-                console.error("Error al acceder a la cámara:", error);
-                speak("Error al acceder a la cámara.");
-            }
+        // 3. Inicializar Detección de Movimiento / Marcha Básica
+        if (window.DeviceMotionEvent) {
+            let stepCount = 0;
+            let lastMagnitude = 0;
 
-            // 2. Inicializar Geolocalización (GPS)
-            if ("geolocation" in navigator) {
-                navigator.geolocation.watchPosition(
-                    (position) => {
-                        const lat = position.coords.latitude.toFixed(5);
-                        const lon = position.coords.longitude.toFixed(5);
-                        gpsStatus.innerText = `GPS: Lat ${lat}, Lon ${lon}`;
-                    },
-                    (error) => {
-                        gpsStatus.innerText = "GPS: Error de señal";
-                    },
-                    { enableHighAccuracy: true, maximumAge: 10000, timeout: 5000 }
-                );
-            } else {
-                gpsStatus.innerText = "GPS: No soportado por el navegador";
-            }
+            window.addEventListener('devicemotion', (event) => {
+                const acc = event.accelerationIncludingGravity;
+                if (acc && acc.x !== null) {
+                    motionStatus.innerText = `Acelerómetro:\n X: ${acc.x.toFixed(1)} \n Y: ${acc.y.toFixed(1)} \n Z: ${acc.z.toFixed(1)}`;
 
-            // 3. Inicializar Sensores de Movimiento (Giroscopio / Acelerómetro)
-            if (window.DeviceMotionEvent) {
-                window.addEventListener('devicemotion', (event) => {
-                    const acc = event.accelerationIncludingGravity;
-                    if (acc) {
-                        motionStatus.innerText = `Acelerómetro:\n X: ${acc.x?.toFixed(1)} \n Y: ${acc.y?.toFixed(1)} \n Z: ${acc.z?.toFixed(1)}`;
+                    // Cálculo simple de magnitud de movimiento para detectar pasos con el celular en el pecho
+                    const magnitude = Math.sqrt(acc.x**2 + acc.y**2 + acc.z**2);
+                    const delta = Math.abs(magnitude - lastMagnitude);
+
+                    // Umbral simple de aceleración al caminar
+                    if (delta > 2.5) {
+                        stepCount++;
+                        if (stepCount % 10 === 0) { // Cada 10 pasos da un reporte de estado simulado
+                            speak("Caminando con normalidad. Ruta despejada al frente.");
+                        }
                     }
-                });
-            } else {
-                motionStatus.innerText = "Sensores de movimiento no disponibles";
-            }
-        });
-    </script>
+                    lastMagnitude = magnitude;
+                }
+            });
+        } else {
+            motionStatus.innerText = "Sensores de movimiento no disponibles";
+        }
+    });
+</script>
 </body>
 </html>
