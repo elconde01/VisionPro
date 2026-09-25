@@ -3,9 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Asistente No Videntes - IA Local</title>
+    <title>Asistente No Videntes - Optimizado</title>
     
-    <!-- TensorFlow.js core y modelo COCO-SSD -->
+    <!-- TensorFlow.js y COCO-SSD -->
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.2/dist/coco-ssd.min.js"></script>
 
@@ -22,9 +22,9 @@
             background-color: #4CAF50;
             color: white;
             border: none;
-            padding: 15px 30px;
-            font-size: 18px;
-            border-radius: 8px;
+            padding: 18px 35px;
+            font-size: 20px;
+            border-radius: 10px;
             cursor: pointer;
             margin-top: 15px;
         }
@@ -54,17 +54,17 @@
 </head>
 <body>
 
-    <h1>Asistente Wearable (IA)</h1>
+    <h1>Asistente Wearable</h1>
     <p id="loadingText">Cargando modelo de inteligencia artificial...</p>
 
-    <button id="startBtn" style="display:none;">Iniciar Sistema y Cámara</button>
+    <button id="startBtn" style="display:none;">Iniciar Sistema</button>
 
     <div class="video-container">
         <video id="cameraStream" autoplay playsinline muted></video>
     </div>
 
     <div class="data-box">
-        <h3>Estado del Sistema:</h3>
+        <h3>Estado:</h3>
         <p id="aiStatus">IA: Esperando inicio...</p>
         <p id="gpsStatus">GPS: Buscando señal...</p>
         <p id="motionStatus">Movimiento: Inactivo</p>
@@ -80,38 +80,38 @@
 
         let cocoModel = null;
         let lastSpeechTime = 0;
+        let lastSpokenObject = "";
         let isRunning = false;
 
+        // Función de Síntesis de Voz optimizada para máxima velocidad
         function speak(text, force = false) {
             if ('speechSynthesis' in window) {
                 const now = Date.now();
-                if (!force && (now - lastSpeechTime < 5000)) return;
+                // Reducimos el tiempo de espera a 3 segundos entre alertas automáticas para mayor dinamismo
+                if (!force && (now - lastSpeechTime < 3000)) return;
 
                 window.speechSynthesis.cancel();
                 const utterance = new SpeechSynthesisUtterance(text);
                 utterance.lang = 'es-ES';
-                utterance.rate = 1.1;
+                utterance.rate = 1.2; // Ligeramente más rápido y dinámico
                 window.speechSynthesis.speak(utterance);
                 lastSpeechTime = Date.now();
             }
         }
 
-        // Cargar el modelo de IA al iniciar de forma segura
         async function initAI() {
             try {
-                aiStatus.innerText = "IA: Descargando pesos del modelo...";
-                // Asegurar que tensorflow esté listo
+                aiStatus.innerText = "IA: Descargando pesos...";
                 await tf.ready();
                 cocoModel = await cocoSsd.load();
                 
-                loadingText.innerText = "¡Modelo de IA listo!";
-                aiStatus.innerText = "IA: Modelo cargado con éxito.";
+                loadingText.innerText = "¡Listo para iniciar!";
+                aiStatus.innerText = "IA: Lista.";
                 startBtn.style.display = 'inline-block';
-                speak("Sistema listo. Coloque el celular en el arnés y presione iniciar.");
+                speak("Sistema listo. Presione iniciar.");
             } catch (error) {
                 console.error("Error al cargar la IA:", error);
-                loadingText.innerText = "Error al cargar la IA (Verifique internet).";
-                aiStatus.innerText = "IA: Error de carga.";
+                loadingText.innerText = "Error al cargar la IA.";
             }
         }
 
@@ -121,7 +121,7 @@
             startBtn.style.display = 'none';
             loadingText.style.display = 'none';
             isRunning = true;
-            speak("Iniciando sensores y visión artificial.", true);
+            speak("Sistema activado.", true);
 
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({
@@ -130,8 +130,7 @@
                 });
                 videoElement.srcObject = stream;
             } catch (error) {
-                console.error("Error al acceder a la cámara:", error);
-                speak("Error al acceder a la cámara.", true);
+                speak("Error de cámara.", true);
             }
 
             if ("geolocation" in navigator) {
@@ -139,7 +138,7 @@
                     (position) => {
                         const lat = position.coords.latitude.toFixed(5);
                         const lon = position.coords.longitude.toFixed(5);
-                        gpsStatus.innerText = `GPS: Lat ${lat}, Lon ${lon}`;
+                        gpsStatus.innerText = `GPS: ${lat}, ${lon}`;
                     },
                     (error) => { gpsStatus.innerText = "GPS: Sin señal"; },
                     { enableHighAccuracy: true, maximumAge: 10000, timeout: 5000 }
@@ -149,6 +148,7 @@
             detectObjectsLoop();
         });
 
+        // Bucle de análisis optimizado y veloz
         async function detectObjectsLoop() {
             if (!isRunning) return;
 
@@ -161,36 +161,43 @@
                             (prev.score > current.score) ? prev : current
                         );
 
-                        if (topPrediction.score > 0.65) {
-                            let translatedName = translateClass(topPrediction.class);
-                            aiStatus.innerText = `IA: Detectado -> ${translatedName} (${Math.round(topPrediction.score * 100)}%)`;
-                            speak(`Atención: ${translatedName} al frente.`);
+                        if (topPrediction.score > 0.60) {
+                            let objectName = translateClass(topPrediction.class);
+                            aiStatus.innerText = `Detectado: ${objectName} (${Math.round(topPrediction.score * 100)}%)`;
+                            
+                            // Solo habla si el objeto detectado es diferente al anterior o pasaron varios segundos
+                            if (objectName !== lastSpokenObject) {
+                                speak(objectName); // Frase ultra corta y directa
+                                lastSpokenObject = objectName;
+                            }
                         }
                     } else {
-                        aiStatus.innerText = "IA: Entorno despejado";
+                        aiStatus.innerText = "Despejado";
+                        lastSpokenObject = ""; // Resetea para avisar si vuelve a aparecer algo
                     }
                 } catch (err) {
                     console.error("Error en inferencia:", err);
                 }
             }
 
-            setTimeout(detectObjectsLoop, 1500);
+            // Intervalo acortado a 700ms para respuestas mucho más ágiles en movimiento
+            setTimeout(detectObjectsLoop, 700);
         }
 
         function translateClass(className) {
             const translations = {
-                'person': 'persona',
-                'bicycle': 'bicicleta',
-                'car': 'auto',
-                'motorcycle': 'moto',
-                'bus': 'colectivo',
-                'truck': 'camión',
-                'chair': 'silla',
-                'couch': 'sillón',
-                'potted plant': 'planta o tronco',
-                'dog': 'perro',
-                'cat': 'gato',
-                'backpack': 'mochila'
+                'person': 'Persona al frente',
+                'bicycle': 'Bicicleta',
+                'car': 'Auto',
+                'motorcycle': 'Moto',
+                'bus': 'Colectivo',
+                'truck': 'Camión',
+                'chair': 'Silla',
+                'couch': 'Sillón',
+                'potted plant': 'Planta o tronco',
+                'dog': 'Perro',
+                'cat': 'Gato',
+                'backpack': 'Mochila'
             };
             return translations[className] || className;
         }
