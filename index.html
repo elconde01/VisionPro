@@ -81,19 +81,24 @@
         }
 
         .video-container {
-            position: relative;
-            display: none;
-            margin-top: 12px;
-            width: min(100%, 420px);
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            overflow: hidden;
+            opacity: 0;
+            pointer-events: none;
+            left: -9999px;
+            top: -9999px;
         }
 
         video {
-            width: 100%;
-            border-radius: 10px;
-            border: 2px solid var(--green);
-            display: none;
-            margin: 0 auto;
-            background: #000;
+            width: 1px;
+            height: 1px;
+            border: none;
+            display: block;
+            opacity: 0;
+            pointer-events: none;
+            background: transparent;
         }
 
         .data-box {
@@ -138,6 +143,7 @@
     <div>
         <input type="text" id="destinationInput" placeholder="Ingrese destino (ej. San Martín 2500)">
         <button id="setRouteBtn" class="btn-secondary">Establecer Ruta</button>
+        <button id="mapsBtn">Abrir en Google Maps</button>
     </div>
 
     <div class="controls">
@@ -164,6 +170,7 @@
         const exploreBtn = document.getElementById('exploreBtn');
         const stopBtn = document.getElementById('stopBtn');
         const setRouteBtn = document.getElementById('setRouteBtn');
+        const mapsBtn = document.getElementById('mapsBtn');
         const listenBtn = document.getElementById('listenBtn');
         const destinationInput = document.getElementById('destinationInput');
         const loadingText = document.getElementById('loadingText');
@@ -308,11 +315,38 @@
             modeStatus.textContent = `Modo: ${modeText}`;
         }
 
+        function buildGoogleMapsUrl(dest) {
+            const cleanDest = encodeURIComponent(dest.trim());
+            if (currentPosition) {
+                return `https://www.google.com/maps/dir/?api=1&origin=${currentPosition.lat},${currentPosition.lon}&destination=${cleanDest}&travelmode=walking`;
+            }
+            return `https://www.google.com/maps/search/?api=1&query=${cleanDest}`;
+        }
+
+        function openGoogleMapsRoute(dest = appState.destination) {
+            const target = (dest || destinationInput.value || '').trim();
+            if (!target) {
+                announceIfNeeded('maps-empty', 'Ingrese un destino antes de abrir Google Maps.', 8000);
+                return;
+            }
+
+            const url = buildGoogleMapsUrl(target);
+            try {
+                window.open(url, '_blank', 'noopener,noreferrer');
+                announceIfNeeded('maps-open', `Ruta abierta en Google Maps para ${target}.`, 15000);
+                setLastCommand(`Abrir ruta: ${target}`);
+            } catch (error) {
+                console.warn('No se pudo abrir Google Maps:', error);
+                announceIfNeeded('maps-fallback', 'No se pudo abrir Google Maps en esta ventana. Copie la ruta manualmente o use la búsqueda del navegador.', 12000);
+            }
+        }
+
         function setDestination(dest) {
             appState.destination = dest;
             appState.routeActive = true;
-            routeStatus.textContent = `Ruta: ${dest}`;
-            speak(`Ruta establecida hacia ${dest}.`);
+            routeStatus.textContent = `Ruta: ${dest} (Google Maps)`;
+            announceIfNeeded('route-set', `Ruta establecida hacia ${dest}.`, 10000);
+            openGoogleMapsRoute(dest);
             setLastCommand(`Ruta hacia ${dest}`);
         }
 
@@ -560,7 +594,16 @@
             if (dest) {
                 setDestination(dest);
             } else {
-                speak('Por favor, ingrese un destino válido.');
+                announceIfNeeded('route-empty', 'Por favor, ingrese un destino válido.', 10000);
+            }
+        });
+
+        mapsBtn.addEventListener('click', () => {
+            const dest = destinationInput.value.trim() || appState.destination;
+            if (dest) {
+                openGoogleMapsRoute(dest);
+            } else {
+                announceIfNeeded('maps-empty', 'Ingrese un destino para abrir una ruta en Google Maps.', 8000);
             }
         });
 
@@ -577,7 +620,10 @@
                     };
 
                     if (appState.routeActive && Date.now() - lastRoutePromptTime > 18000) {
-                        speak('Ruta activa. Siga la dirección indicada y manténgase en la trayectoria esperada.');
+                        const routeMessage = appState.destination
+                            ? `Ruta activa hacia ${appState.destination}. Siga la dirección de Google Maps y manténgase en la trayectoria esperada.`
+                            : 'Ruta activa. Siga la dirección indicada y manténgase en la trayectoria esperada.';
+                        speak(routeMessage);
                         lastRoutePromptTime = Date.now();
                     }
                 },
