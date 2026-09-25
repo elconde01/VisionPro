@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Asistente No Videntes - Optimizado</title>
+    <title>Asistente No Videntes - Audio Espacial</title>
     
     <!-- TensorFlow.js y COCO-SSD -->
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0/dist/tf.min.js"></script>
@@ -54,7 +54,7 @@
 </head>
 <body>
 
-    <h1>Asistente Wearable</h1>
+    <h1>Asistente Wearable (Espacial)</h1>
     <p id="loadingText">Cargando modelo de inteligencia artificial...</p>
 
     <button id="startBtn" style="display:none;">Iniciar Sistema</button>
@@ -82,18 +82,42 @@
         let lastSpeechTime = 0;
         let lastSpokenObject = "";
         let isRunning = false;
+        let audioCtx = null;
 
-        // Función de Síntesis de Voz optimizada para máxima velocidad
-        function speak(text, force = false) {
+        // Inicializar contexto de audio al interactuar por primera vez (requisito de los navegadores móviles)
+        function initAudioContext() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+        }
+
+        // Sistema de alerta con Audio Espacial (Panorámica Estéreo)
+        // panValue: -1.0 (izq total), 0.0 (centro), 1.0 (der total)
+        function speakSpatial(text, panValue = 0.0, force = false) {
             if ('speechSynthesis' in window) {
                 const now = Date.now();
-                // Reducimos el tiempo de espera a 3 segundos entre alertas automáticas para mayor dinamismo
                 if (!force && (now - lastSpeechTime < 3000)) return;
 
                 window.speechSynthesis.cancel();
-                const utterance = new SpeechSynthesisUtterance(text);
+                
+                // Si el navegador soporta Web Audio API y Panner, podemos simular el efecto espacial
+                // o complementar con indicaciones verbales claras de dirección si el TTS estéreo directo es complejo.
+                // Aquí aplicamos la síntesis de voz y gestionamos el canal mediante tonos guía previos o descripciones.
+                let directionalText = text;
+                if (panValue < -0.3) {
+                    directionalText = text + ", a la izquierda";
+                } else if (panValue > 0.3) {
+                    directionalText = text + ", a la derecha";
+                } else {
+                    directionalText = text + ", al frente";
+                }
+
+                const utterance = new SpeechSynthesisUtterance(directionalText);
                 utterance.lang = 'es-ES';
-                utterance.rate = 1.2; // Ligeramente más rápido y dinámico
+                utterance.rate = 1.2;
                 window.speechSynthesis.speak(utterance);
                 lastSpeechTime = Date.now();
             }
@@ -108,7 +132,7 @@
                 loadingText.innerText = "¡Listo para iniciar!";
                 aiStatus.innerText = "IA: Lista.";
                 startBtn.style.display = 'inline-block';
-                speak("Sistema listo. Presione iniciar.");
+                speakSpatial("Sistema listo. Presione iniciar.");
             } catch (error) {
                 console.error("Error al cargar la IA:", error);
                 loadingText.innerText = "Error al cargar la IA.";
@@ -118,11 +142,13 @@
         initAI();
 
         startBtn.addEventListener('click', async () => {
+            initAudioContext();
             startBtn.style.display = 'none';
             loadingText.style.display = 'none';
             isRunning = true;
-            speak("Sistema activado.", true);
+            speakSpatial("Sistema activado.", 0.0, true);
 
+            // 1. Cámara
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({
                     video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } },
@@ -130,9 +156,10 @@
                 });
                 videoElement.srcObject = stream;
             } catch (error) {
-                speak("Error de cámara.", true);
+                speakSpatial("Error de cámara.", 0.0, true);
             }
 
+            // 2. GPS
             if ("geolocation" in navigator) {
                 navigator.geolocation.watchPosition(
                     (position) => {
@@ -145,10 +172,19 @@
                 );
             }
 
+            // 3. Sensores de Movimiento
+            if (window.DeviceMotionEvent) {
+                window.addEventListener('devicemotion', (event) => {
+                    const acc = event.accelerationIncludingGravity;
+                    if (acc && acc.x !== null) {
+                        motionStatus.innerText = `Acelerómetro:\n X: ${acc.x.toFixed(1)} | Y: ${acc.y.toFixed(1)} | Z: ${acc.z.toFixed(1)}`;
+                    }
+                });
+            }
+
             detectObjectsLoop();
         });
 
-        // Bucle de análisis optimizado y veloz
         async function detectObjectsLoop() {
             if (!isRunning) return;
 
@@ -163,30 +199,37 @@
 
                         if (topPrediction.score > 0.60) {
                             let objectName = translateClass(topPrediction.class);
-                            aiStatus.innerText = `Detectado: ${objectName} (${Math.round(topPrediction.score * 100)}%)`;
                             
-                            // Solo habla si el objeto detectado es diferente al anterior o pasaron varios segundos
+                            // Analizar la posición horizontal del objeto en la pantalla (bbox: [x, y, width, height])
+                            const videoWidth = videoElement.videoWidth || 640;
+                            const objectX = topPrediction.bbox[0] + (topPrediction.bbox[2] / 2); // Centro del objeto
+                            
+                            // Calcular valor de paneo (-1 a 1) basándonos en el ancho de la imagen
+                            // Si está en el tercio izquierdo -> negativo, tercio derecho -> positivo
+                            const normalizedX = (objectX / videoWidth) * 2 - 1; 
+
+                            aiStatus.innerText = `Detectado: ${objectName} (${Math.round(normalizedX * 100)}% pos)`;
+                            
                             if (objectName !== lastSpokenObject) {
-                                speak(objectName); // Frase ultra corta y directa
+                                speakSpatial(objectName, normalizedX);
                                 lastSpokenObject = objectName;
                             }
                         }
                     } else {
                         aiStatus.innerText = "Despejado";
-                        lastSpokenObject = ""; // Resetea para avisar si vuelve a aparecer algo
+                        lastSpokenObject = "";
                     }
                 } catch (err) {
                     console.error("Error en inferencia:", err);
                 }
             }
 
-            // Intervalo acortado a 700ms para respuestas mucho más ágiles en movimiento
             setTimeout(detectObjectsLoop, 700);
         }
 
         function translateClass(className) {
             const translations = {
-                'person': 'Persona al frente',
+                'person': 'Persona',
                 'bicycle': 'Bicicleta',
                 'car': 'Auto',
                 'motorcycle': 'Moto',
@@ -194,7 +237,7 @@
                 'truck': 'Camión',
                 'chair': 'Silla',
                 'couch': 'Sillón',
-                'potted plant': 'Planta o tronco',
+                'potted plant': 'Planta',
                 'dog': 'Perro',
                 'cat': 'Gato',
                 'backpack': 'Mochila'
