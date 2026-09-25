@@ -32,6 +32,11 @@
             text-align: center;
             padding: 16px;
             margin: 0;
+            overflow: hidden;
+        }
+
+        h1, .controls, .data-box, .status-pill, input, #loadingText, #lastCommandStatus, #routeStatus, #modeStatus, #aiStatus {
+            display: none !important;
         }
 
         h1 {
@@ -315,6 +320,136 @@
             modeStatus.textContent = `Modo: ${modeText}`;
         }
 
+        function resolveRouteContextFromQuery(rawText) {
+            const text = rawText.toLowerCase();
+            const patterns = [
+                /(ruta a|ir a|vamos a|llegar a|cómo llego a|como llego a|quiero ir a|hay que ir a|dirección a|destino a)/i,
+                /(ruta hacia|hacia|al|a la|hasta)/i
+            ];
+
+            for (const pattern of patterns) {
+                const match = rawText.match(pattern);
+                if (match) {
+                    const suffix = rawText.substring(match.index + match[0].length).trim();
+                    if (suffix) return suffix.replace(/^a\s+|^al\s+|^la\s+|^hacia\s+/i, '').trim();
+                }
+            }
+
+            const fallback = text
+                .replace(/.*?(ruta a|ir a|vamos a|llegar a|quiero ir a|dirección a|destino a|hacia)\s+/i, '')
+                .replace(/\b(distancia|tiempo|camino|ruta|llegar|horario|cierra|cerrado|abre)\b.*$/i, '')
+                .trim();
+
+            return fallback || appState.destination || '';
+        }
+
+        async function getPlaceCoordinates(query) {
+            const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(query)}`;
+            const response = await fetch(url, { headers: { Accept: 'application/json' } });
+            const data = await response.json();
+            if (!data || !data.length) return null;
+            const place = data[0];
+            return {
+                lat: parseFloat(place.lat),
+                lon: parseFloat(place.lon),
+                displayName: place.display_name,
+                type: place.type || 'place'
+            };
+        }
+
+        async function getWalkingRouteSummary(origin, destinationQuery) {
+            const destination = await getPlaceCoordinates(destinationQuery);
+            if (!destination || !origin) return null;
+
+            const url = `https://router.project-osrm.org/route/v1/foot/${origin.lon},${origin.lat};${destination.lon},${destination.lat}?overview=false&geometries=geojson`;
+            const response = await fetch(url, { headers: { Accept: 'application/json' } });
+            const data = await response.json();
+            if (!data.routes || !data.routes.length) return null;
+
+            const route = data.routes[0];
+            const distanceKm = (route.distance / 1000).toFixed(1);
+            const minutes = Math.max(1, Math.round(route.duration / 60));
+            return {
+                destination,
+                distanceKm,
+                minutes,
+                route,
+            };
+        }
+
+        async function getOpeningHoursIfAvailable(query) {
+            try {
+                const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(query)}`;
+                const response = await fetch(url, { headers: { Accept: 'application/json' } });
+                const data = await response.json();
+                if (!data || !data.length) return null;
+                const place = data[0];
+                return place.extratags && place.extratags.opening_hours ? place.extratags.opening_hours : null;
+            } catch (error) {
+                return null;
+            }
+        }
+
+        function speakIfNeeded(message) {
+            if (!message) return;
+            if (!('speechSynthesis' in window)) return;
+            window.speechSynthesis.cancel();
+            const utterance = new SpeechSynthesisUtterance(message);
+            utterance.lang = 'es-ES';
+            utterance.rate = 1.1;
+            utterance.pitch = 1.0;
+            window.speechSynthesis.speak(utterance);
+        }
+
+        async function handleNaturalRouteRequest(command) {
+            const target = resolveRouteContextFromQuery(command);
+            if (!target) {
+                speakIfNeeded('No entendí el destino. Repetí el nombre del sitio o lugar.');
+                return;
+            }
+
+            const routeQuery = target.replace(/^a\s+|^al\s+|^la\s+|^hacia\s+/i, '').trim();
+            setDestination(routeQuery);
+
+            if (!currentPosition) {
+                speakIfNeeded(`La ruta a ${routeQuery} se abrió en Google Maps. Esperá un momento mientras obtengo tu ubicación actual.`);
+                openGoogleMapsRoute(routeQuery);
+                return;
+            }
+
+            try {
+                const summary = await getWalkingRouteSummary(currentPosition, routeQuery);
+                if (!summary) {
+                    speakIfNeeded(`La ruta a ${routeQuery} quedó abierta en Google Maps. Si querés, te la repito con distancia y tiempo.`);
+                    openGoogleMapsRoute(routeQuery);
+                    return;
+                }
+
+                const timeText = summary.minutes >= 60
+                    ? `${Math.floor(summary.minutes / 60)} horas y ${summary.minutes % 60} minutos`
+                    : `${summary.minutes} minutos`;
+
+                const mentionHours = /horario|cierra|cerrado|abierto|abre/.test(command.toLowerCase());
+                let response = `La ruta a ${summary.destination.displayName || routeQuery} tiene ${summary.distanceKm} kilómetros y tarda aproximadamente ${timeText} caminando.`;
+
+                if (mentionHours) {
+                    const openingHours = await getOpeningHoursIfAvailable(routeQuery);
+                    if (openingHours) {
+                        response += ` El horario disponible es ${openingHours}.`;
+                    } else {
+                        response += ' No tengo horario de cierre disponible para ese sitio en este momento.';
+                    }
+                }
+
+                speakIfNeeded(response);
+                openGoogleMapsRoute(routeQuery);
+            } catch (error) {
+                console.error('Error al calcular ruta:', error);
+                speakIfNeeded(`La ruta a ${routeQuery} quedó abierta en Google Maps. No pude calcular distancia exacta en este momento.`);
+                openGoogleMapsRoute(routeQuery);
+            }
+        }
+
         function buildGoogleMapsUrl(dest) {
             const cleanDest = encodeURIComponent(dest.trim());
             if (currentPosition) {
@@ -365,7 +500,6 @@
             appState.routeActive = Boolean(appState.destination);
             appState.mode = 'NAVIGATING';
             modeStatus.textContent = 'Modo: Marcha y Ruta Activa';
-            speak('Modo marcha activado.', true);
             setLastCommand('Iniciar marcha');
             mainLoop();
         }
@@ -376,7 +510,6 @@
             appState.mode = 'EXPLORING';
             modeStatus.textContent = 'Modo: Exploración Continua';
             lastSpokenExploreObject = '';
-            speak('Modo exploración continua activado. Mueva la cámara lentamente.', true);
             setLastCommand('Explorar entorno');
             mainLoop();
         }
@@ -430,13 +563,8 @@
                 return;
             }
 
-            if (/ir a|ruta a|destino|quiero ir a/.test(normalized)) {
-                const dest = extractDestination(normalized);
-                if (dest) {
-                    setDestination(dest);
-                } else {
-                    announceIfNeeded('voice-destination', 'No entendí el destino. Repítalo por favor.', 8000);
-                }
+            if (/ruta a|ir a|vamos a|llegar a|quiero ir a|como llego a|cómo llego a|cómo ir a|como ir a|destino|dirección a|hacia/.test(normalized)) {
+                handleNaturalRouteRequest(command);
                 return;
             }
 
@@ -450,17 +578,27 @@
                 return;
             }
 
+            if (/distancia|tiempo|cuánto falta|cuanto falta|cuánto tarda|cuanto tarda|horario|abre|cierra|cerrado/.test(normalized)) {
+                const target = resolveRouteContextFromQuery(command) || appState.destination || '';
+                if (!target) {
+                    speakIfNeeded('Todavía no definiste un destino. Decime a qué lugar querés ir.');
+                    return;
+                }
+                handleNaturalRouteRequest(command);
+                return;
+            }
+
             if (/repetir|repita|dilo otra vez|repite/.test(normalized)) {
                 announceIfNeeded('voice-repeat', lastSpoken || 'No hay una instrucción reciente.', 8000);
                 return;
             }
 
             if (/ayuda|comandos|menu/.test(normalized)) {
-                announceIfNeeded('voice-help', 'Puedes decir iniciar marcha, explorar entorno, detener, ir a un destino, dónde estoy o qué hay delante.', 12000);
+                speakIfNeeded('Podés decir iniciar marcha, cambiar a exploración, ir a un sitio, decirme cuánta distancia hay, o preguntarme qué hay delante.');
                 return;
             }
 
-            announceIfNeeded('voice-unknown', 'No entendí la instrucción. Puedo ayudar con marcha, exploración, destino o preguntas del entorno.', 12000);
+            speakIfNeeded('No entendí la instrucción. Podés pedir ruta, distancia, tiempo, o explorar el entorno.');
         }
 
         function buildSceneSummary(predictions) {
@@ -514,9 +652,6 @@
 
             recognition.onerror = (event) => {
                 console.warn('Speech recognition error:', event.error);
-                if (event.error !== 'no-speech') {
-                    speak('No pude escuchar bien. Inténtelo nuevamente.');
-                }
             };
 
             recognition.onend = () => {
@@ -534,7 +669,6 @@
 
         function toggleVoiceCapture() {
             if (!recognition) {
-                speak('La voz aún no está disponible en este navegador.');
                 return;
             }
 
@@ -542,13 +676,11 @@
                 if (appState.voiceEnabled) {
                     recognition.stop();
                     updateVoiceStatus(false);
-                    speak('Asistente de voz detenido.');
                     return;
                 }
 
                 recognition.start();
                 updateVoiceStatus(true);
-                speak('Asistente de voz activado.', true);
                 setLastCommand('Voz activada');
             } catch (error) {
                 console.warn('Speech start error:', error);
@@ -559,13 +691,20 @@
             try {
                 await tf.ready();
                 cocoModel = await cocoSsd.load();
-                loadingText.textContent = 'Sistema preparado. Puedes usar voz o tocar los controles.';
-                speak('Sistema listo. Puedes decir iniciar marcha, explorar entorno o detener.', true);
-                initSpeechRecognition();
             } catch (error) {
                 console.error(error);
-                loadingText.textContent = 'Error al iniciar modelos, pero la PWA sigue funcionando como asistente básico.';
-                initSpeechRecognition();
+            }
+
+            initSpeechRecognition();
+            startCamera();
+            startWalkingMode();
+            if (recognition) {
+                try {
+                    recognition.start();
+                    updateVoiceStatus(true);
+                } catch (error) {
+                    console.warn('Auto-start voice failed:', error);
+                }
             }
         }
 
@@ -580,13 +719,22 @@
                 }
             } catch (e) {
                 console.error('Error de cámara', e);
-                speak('No se pudo acceder a la cámara.');
             }
         }
 
         listenBtn.addEventListener('click', () => {
             initAudioContext();
             toggleVoiceCapture();
+        });
+
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'hidden' && navigator.wakeLock && navigator.wakeLock.request) {
+                try {
+                    navigator.wakeLock.request('screen').catch(() => {});
+                } catch (error) {
+                    console.warn('WakeLock no disponible:', error);
+                }
+            }
         });
 
         setRouteBtn.addEventListener('click', () => {
