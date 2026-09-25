@@ -401,6 +401,14 @@
             window.speechSynthesis.speak(utterance);
         }
 
+        function buildMapsDeepLink(query, origin) {
+            const encodedQuery = encodeURIComponent(query.trim());
+            if (origin && origin.lat !== undefined && origin.lon !== undefined) {
+                return `https://www.google.com/maps/dir/?api=1&origin=${origin.lat},${origin.lon}&destination=${encodedQuery}&travelmode=walking`;
+            }
+            return `https://www.google.com/maps/search/?api=1&query=${encodedQuery}`;
+        }
+
         async function handleNaturalRouteRequest(command) {
             const target = resolveRouteContextFromQuery(command);
             if (!target) {
@@ -409,19 +417,29 @@
             }
 
             const routeQuery = target.replace(/^a\s+|^al\s+|^la\s+|^hacia\s+/i, '').trim();
+            if (!routeQuery) {
+                speakIfNeeded('No entendí el destino. Repetí el nombre del sitio o lugar.');
+                return;
+            }
+
             setDestination(routeQuery);
 
+            const googleMapsUrl = buildMapsDeepLink(routeQuery, currentPosition);
+            try {
+                window.open(googleMapsUrl, '_blank', 'noopener,noreferrer');
+            } catch (error) {
+                console.warn('No se pudo abrir Google Maps:', error);
+            }
+
             if (!currentPosition) {
-                speakIfNeeded(`La ruta a ${routeQuery} se abrió en Google Maps. Esperá un momento mientras obtengo tu ubicación actual.`);
-                openGoogleMapsRoute(routeQuery);
+                speakIfNeeded(`Te llevo a ${routeQuery}. La ruta se abrió en Google Maps.`);
                 return;
             }
 
             try {
                 const summary = await getWalkingRouteSummary(currentPosition, routeQuery);
                 if (!summary) {
-                    speakIfNeeded(`La ruta a ${routeQuery} quedó abierta en Google Maps. Si querés, te la repito con distancia y tiempo.`);
-                    openGoogleMapsRoute(routeQuery);
+                    speakIfNeeded(`Te llevo a ${routeQuery}. La ruta se abrió en Google Maps.`);
                     return;
                 }
 
@@ -430,7 +448,7 @@
                     : `${summary.minutes} minutos`;
 
                 const mentionHours = /horario|cierra|cerrado|abierto|abre/.test(command.toLowerCase());
-                let response = `La ruta a ${summary.destination.displayName || routeQuery} tiene ${summary.distanceKm} kilómetros y tarda aproximadamente ${timeText} caminando.`;
+                let response = `Te llevo a ${summary.destination.displayName || routeQuery}. La ruta tiene ${summary.distanceKm} kilómetros y tarda aproximadamente ${timeText} caminando.`;
 
                 if (mentionHours) {
                     const openingHours = await getOpeningHoursIfAvailable(routeQuery);
@@ -442,11 +460,9 @@
                 }
 
                 speakIfNeeded(response);
-                openGoogleMapsRoute(routeQuery);
             } catch (error) {
                 console.error('Error al calcular ruta:', error);
-                speakIfNeeded(`La ruta a ${routeQuery} quedó abierta en Google Maps. No pude calcular distancia exacta en este momento.`);
-                openGoogleMapsRoute(routeQuery);
+                speakIfNeeded(`Te llevo a ${routeQuery}. La ruta se abrió en Google Maps.`);
             }
         }
 
