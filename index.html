@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Asistente No Videntes - IA Local</title>
     
-    <!-- Importar TensorFlow.js y el modelo COCO-SSD para visión por computadora -->
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+    <!-- TensorFlow.js core y modelo COCO-SSD -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.2/dist/coco-ssd.min.js"></script>
 
     <style>
         body {
@@ -59,12 +59,10 @@
 
     <button id="startBtn" style="display:none;">Iniciar Sistema y Cámara</button>
 
-    <!-- Vista de la cámara montada en el pecho -->
     <div class="video-container">
         <video id="cameraStream" autoplay playsinline muted></video>
     </div>
 
-    <!-- Panel de telemetría y detección -->
     <div class="data-box">
         <h3>Estado del Sistema:</h3>
         <p id="aiStatus">IA: Esperando inicio...</p>
@@ -84,11 +82,10 @@
         let lastSpeechTime = 0;
         let isRunning = false;
 
-        // Función de Síntesis de Voz inteligente
         function speak(text, force = false) {
             if ('speechSynthesis' in window) {
                 const now = Date.now();
-                if (!force && (now - lastSpeechTime < 5000)) return; // Evita saturar el audio (filtro de 5s)
+                if (!force && (now - lastSpeechTime < 5000)) return;
 
                 window.speechSynthesis.cancel();
                 const utterance = new SpeechSynthesisUtterance(text);
@@ -99,21 +96,26 @@
             }
         }
 
-        // 1. Cargar el modelo de IA al iniciar la página de forma totalmente autónoma
-        async.loadModel = async function() {
+        // Cargar el modelo de IA al iniciar de forma segura
+        async function initAI() {
             try {
-                aiStatus.innerText = "IA: Descargando modelo ligero...";
+                aiStatus.innerText = "IA: Descargando pesos del modelo...";
+                // Asegurar que tensorflow esté listo
+                await tf.ready();
                 cocoModel = await cocoSsd.load();
+                
                 loadingText.innerText = "¡Modelo de IA listo!";
                 aiStatus.innerText = "IA: Modelo cargado con éxito.";
                 startBtn.style.display = 'inline-block';
                 speak("Sistema listo. Coloque el celular en el arnés y presione iniciar.");
             } catch (error) {
                 console.error("Error al cargar la IA:", error);
-                aiStatus.innerText = "IA: Error al cargar el modelo.";
+                loadingText.innerText = "Error al cargar la IA (Verifique internet).";
+                aiStatus.innerText = "IA: Error de carga.";
             }
-        };
-        async.loadModel();
+        }
+
+        initAI();
 
         startBtn.addEventListener('click', async () => {
             startBtn.style.display = 'none';
@@ -121,7 +123,6 @@
             isRunning = true;
             speak("Iniciando sensores y visión artificial.", true);
 
-            // 2. Inicializar Cámara Trasera (vista frontal desde el pecho)
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({
                     video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } },
@@ -133,7 +134,6 @@
                 speak("Error al acceder a la cámara.", true);
             }
 
-            // 3. Inicializar GPS
             if ("geolocation" in navigator) {
                 navigator.geolocation.watchPosition(
                     (position) => {
@@ -146,11 +146,9 @@
                 );
             }
 
-            // 4. Bucle principal de Visión Artificial (Inferencia en tiempo real)
             detectObjectsLoop();
         });
 
-        // Bucle continuo que analiza los fotogramas de la cámara con IA
         async function detectObjectsLoop() {
             if (!isRunning) return;
 
@@ -159,31 +157,26 @@
                     const predictions = await cocoModel.detect(videoElement);
                     
                     if (predictions.length > 0) {
-                        // Tomamos el objeto con mayor nivel de confianza detectado
                         const topPrediction = predictions.reduce((prev, current) => 
                             (prev.score > current.score) ? prev : current
                         );
 
-                        if (topPrediction.score > 0.65) { // Umbral de certeza del 65%
+                        if (topPrediction.score > 0.65) {
                             let translatedName = translateClass(topPrediction.class);
                             aiStatus.innerText = `IA: Detectado -> ${translatedName} (${Math.round(topPrediction.score * 100)}%)`;
-                            
-                            // Emitir alerta auditiva inteligente de lo que ve el pecho
                             speak(`Atención: ${translatedName} al frente.`);
                         }
                     } else {
                         aiStatus.innerText = "IA: Entorno despejado";
                     }
                 } catch (err) {
-                    console.error("Error en inferencia de IA:", err);
+                    console.error("Error en inferencia:", err);
                 }
             }
 
-            // Repetir el análisis cada 1.5 segundos para no sobrecalentar el procesador móvil
             setTimeout(detectObjectsLoop, 1500);
         }
 
-        // Traductor rápido de las clases principales del modelo al español
         function translateClass(className) {
             const translations = {
                 'person': 'persona',
