@@ -82,7 +82,7 @@
 
         .video-container {
             position: relative;
-            display: inline-block;
+            display: none;
             margin-top: 12px;
             width: min(100%, 420px);
         }
@@ -91,7 +91,7 @@
             width: 100%;
             border-radius: 10px;
             border: 2px solid var(--green);
-            display: block;
+            display: none;
             margin: 0 auto;
             background: #000;
         }
@@ -191,9 +191,12 @@
         let recognition = null;
         let lastAlertTime = 0;
         let lastSpokenExploreObject = '';
+        let lastExploreSpeechTime = 0;
         let currentPosition = null;
         let lastRoutePromptTime = 0;
         let lastSpoken = '';
+        let lastSpeechKey = '';
+        let lastSpeechTimestamp = 0;
 
         function vibrate(pattern) {
             if ('vibrate' in navigator) {
@@ -213,15 +216,16 @@
         function playDistinctSpatialAlert(pan = 0.0) {
             if (!audioCtx) return;
             const isLeft = pan < 0;
+            const adjustedPan = isLeft ? -1 : 1;
             const freq = isLeft ? 440 : 880;
 
             vibrate(isLeft ? [40, 60, 90] : [30, 40]);
 
             if (!isLeft) {
-                playTone(freq, pan, 0.0, 0.08);
-                setTimeout(() => playTone(freq, pan, 0.0, 0.08), 120);
+                playTone(freq, adjustedPan, 0.0, 0.08);
+                setTimeout(() => playTone(freq, adjustedPan, 0.0, 0.08), 120);
             } else {
-                playTone(freq, pan, 0.0, 0.2);
+                playTone(freq, adjustedPan, 0.0, 0.2);
             }
         }
 
@@ -259,6 +263,32 @@
             lastSpoken = text;
             appState.lastInstruction = text;
             window.speechSynthesis.speak(utterance);
+        }
+
+        function announceIfNeeded(key, message, minIntervalMs = 4000) {
+            const now = Date.now();
+            const shouldSpeak = !lastSpeechKey || key !== lastSpeechKey || (now - lastSpeechTimestamp) >= minIntervalMs;
+            if (!shouldSpeak) return;
+            lastSpeechKey = key;
+            lastSpeechTimestamp = now;
+            speak(message);
+        }
+
+        function humanizeDirectionText(pan) {
+            if (pan < -0.25) return 'a la izquierda';
+            if (pan > 0.25) return 'a la derecha';
+            return 'al frente';
+        }
+
+        function humanizeAlertMessage(pan) {
+            if (pan < -0.25) return 'Obstáculo a la izquierda. Desvíe hacia la derecha.';
+            if (pan > 0.25) return 'Obstáculo a la derecha. Desvíe hacia la izquierda.';
+            return 'Obstáculo al frente. Deténgase y rodee.';
+        }
+
+        function humanizeExplorationMessage(translated, pan) {
+            const side = humanizeDirectionText(pan);
+            return `${translated} ${side}.`;
         }
 
         function updateVoiceStatus(active) {
@@ -328,10 +358,14 @@
         function askAboutEnvironment() {
             const narrative = appState.sceneSummary || 'No se detectan objetos importantes en este momento.';
             if (appState.mode === 'WAITING' || appState.mode === 'STOPPED') {
-                speak('El sistema está en espera. Puede iniciar marcha o explorar el entorno.');
+                announceIfNeeded('context-waiting', 'El sistema está en espera. Puede iniciar marcha o explorar el entorno.', 15000);
                 return;
             }
-            speak(`${narrative} ${appState.routeActive ? 'La ruta está activa.' : 'No hay ruta activa.'}`);
+
+            const routeHint = appState.routeActive ? 'La ruta sigue activa.' : 'No hay una ruta activa ahora.';
+            const normalizedNarrative = narrative.replace(/\./g, '').trim();
+            const humanReply = `${normalizedNarrative}. ${routeHint}`;
+            announceIfNeeded('context-environment', humanReply, 15000);
         }
 
         function extractDestination(text) {
@@ -367,7 +401,7 @@
                 if (dest) {
                     setDestination(dest);
                 } else {
-                    speak('No entendí el destino. Repítalo por favor.');
+                    announceIfNeeded('voice-destination', 'No entendí el destino. Repítalo por favor.', 8000);
                 }
                 return;
             }
@@ -377,22 +411,22 @@
                 return;
             }
 
-            if (/qué hay|que hay|adelante|frente|izquierda|derecha|hay gente|hay salida|salida cercana/.test(normalized)) {
+            if (/qué hay|que hay|adelante|frente|izquierda|derecha|hay gente|hay salida|salida cercana|qué hay a la|que hay a la/.test(normalized)) {
                 askAboutEnvironment();
                 return;
             }
 
             if (/repetir|repita|dilo otra vez|repite/.test(normalized)) {
-                speak(lastSpoken || 'No hay una instrucción reciente.');
+                announceIfNeeded('voice-repeat', lastSpoken || 'No hay una instrucción reciente.', 8000);
                 return;
             }
 
             if (/ayuda|comandos|menu/.test(normalized)) {
-                speak('Puedes decir iniciar marcha, explorar entorno, detener, ir a un destino, dónde estoy o qué hay delante.');
+                announceIfNeeded('voice-help', 'Puedes decir iniciar marcha, explorar entorno, detener, ir a un destino, dónde estoy o qué hay delante.', 12000);
                 return;
             }
 
-            speak('No entendí la instrucción. Intente decir iniciar marcha, explorar entorno, ir a un destino o preguntar qué hay delante.');
+            announceIfNeeded('voice-unknown', 'No entendí la instrucción. Puedo ayudar con marcha, exploración, destino o preguntas del entorno.', 12000);
         }
 
         function buildSceneSummary(predictions) {
@@ -416,6 +450,11 @@
 
             appState.lastDetectedObject = translated;
             return `Hay ${translated.toLowerCase()} ${side}.`;
+        }
+
+        function describeExplorationObject(translated, pan) {
+            const sideText = humanizeDirectionText(pan);
+            return `${translated} ${sideText}.`;
         }
 
         function initSpeechRecognition() {
@@ -566,11 +605,12 @@
                             const normalizedPan = (objectX / videoWidth) * 2 - 1;
 
                             const now = Date.now();
-                            if (now - lastAlertTime > 1200) {
+                            const direction = normalizedPan < -0.25 ? 'derecha' : normalizedPan > 0.25 ? 'izquierda' : 'frente';
+                            const message = humanizeAlertMessage(normalizedPan);
+
+                            if (now - lastAlertTime > 3500) {
                                 playDistinctSpatialAlert(normalizedPan);
-                                if (normalizedPan < -0.25) speak('Desviar a la derecha');
-                                else if (normalizedPan > 0.25) speak('Desviar a la izquierda');
-                                else speak('Obstáculo al frente');
+                                announceIfNeeded(`obstacle-${direction}`, message, 6000);
                                 lastAlertTime = now;
                             }
 
@@ -589,10 +629,14 @@
                                 const objectX = top.bbox[0] + (top.bbox[2] / 2);
                                 const pan = (objectX / videoWidth) * 2 - 1;
 
-                                if (translated !== lastSpokenExploreObject) {
+                                const now = Date.now();
+                                const contextualDescription = describeExplorationObject(translated, pan);
+                                const sameObject = translated === lastSpokenExploreObject;
+                                if (!sameObject || (now - lastExploreSpeechTime) > 12000) {
                                     playDistinctSpatialAlert(pan);
-                                    speak(translated);
+                                    announceIfNeeded(`explore-${translated}`, contextualDescription, 12000);
                                     lastSpokenExploreObject = translated;
+                                    lastExploreSpeechTime = now;
                                 }
 
                                 aiStatus.textContent = `Explorando: ${translated}`;
