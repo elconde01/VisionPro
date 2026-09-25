@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Asistente No Videntes - Tonos Diferenciados</title>
+    <title>Asistente No Videntes - Exploración Continua</title>
     
     <!-- TensorFlow.js y COCO-SSD -->
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0/dist/tf.min.js"></script>
@@ -18,19 +18,34 @@
             padding: 15px;
             margin: 0;
         }
+        button, input {
+            font-size: 16px;
+            padding: 12px;
+            border-radius: 8px;
+            border: none;
+            margin-top: 10px;
+        }
         button {
             background-color: #4CAF50;
             color: white;
-            border: none;
-            padding: 18px 30px;
-            font-size: 18px;
-            border-radius: 10px;
             cursor: pointer;
-            margin-top: 15px;
             margin-right: 5px;
         }
         .btn-secondary {
             background-color: #2196F3;
+        }
+        .btn-stop {
+            background-color: #f44336;
+        }
+        input {
+            width: 80%;
+            max-width: 320px;
+            background: #2b2b2b;
+            color: white;
+            border: 1px solid #444;
+            display: block;
+            margin: 10px auto;
+            text-align: center;
         }
         .video-container {
             position: relative;
@@ -52,7 +67,7 @@
             margin-top: 10px;
             text-align: left;
             font-family: monospace;
-            font-size: 14px;
+            font-size: 13px;
         }
     </style>
 </head>
@@ -62,8 +77,14 @@
     <p id="loadingText">Cargando sistema de sensores...</p>
 
     <div>
-        <button id="startBtn" style="display:none;">Iniciar Marcha (Silencio / Alerta)</button>
-        <button id="exploreBtn" class="btn-secondary" style="display:none;">Explorar Entorno</button>
+        <input type="text" id="destinationInput" placeholder="Ingrese destino (ej. San Martín 2500)">
+        <button id="setRouteBtn" class="btn-secondary">Establecer Ruta</button>
+    </div>
+
+    <div>
+        <button id="startBtn" style="display:none;">Iniciar Marcha</button>
+        <button id="exploreBtn" class="btn-secondary" style="display:none;">Explorar Entorno (Continuo)</button>
+        <button id="stopBtn" class="btn-stop" style="display:none;">Detener Todo</button>
     </div>
 
     <div class="video-container">
@@ -73,23 +94,29 @@
     <div class="data-box">
         <h3>Estado:</h3>
         <p id="modeStatus">Modo: En espera</p>
+        <p id="routeStatus">Ruta: Sin destino activo</p>
         <p id="aiStatus">IA: Lista</p>
-        <p id="motionStatus">Movimiento: Inactivo</p>
     </div>
 
     <script>
         const startBtn = document.getElementById('startBtn');
         const exploreBtn = document.getElementById('exploreBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const setRouteBtn = document.getElementById('setRouteBtn');
+        const destinationInput = document.getElementById('destinationInput');
         const loadingText = document.getElementById('loadingText');
         const videoElement = document.getElementById('cameraStream');
-        const motionStatus = document.getElementById('motionStatus');
         const aiStatus = document.getElementById('aiStatus');
         const modeStatus = document.getElementById('modeStatus');
+        const routeStatus = document.getElementById('routeStatus');
 
         let cocoModel = null;
         let audioCtx = null;
-        let isWalking = false;
+        let currentMode = "IDLE"; // "IDLE", "WALKING", "EXPLORING"
         let lastAlertTime = 0;
+        let lastSpokenExploreObject = "";
+        let currentPosition = null;
+        let targetDestination = "";
 
         function initAudioContext() {
             if (!audioCtx) {
@@ -100,20 +127,15 @@
             }
         }
 
-        // Generador de alertas acústicas inequívocas por lado
-        // pan: -1.0 (izq total), 1.0 (der total)
         function playDistinctSpatialAlert(pan = 0.0) {
             if (!audioCtx) return;
-
             const isLeft = pan < 0;
-            const freq = isLeft ? 440 : 880; // Izquierda: Tono grave (440Hz) | Derecha: Tono agudo (880Hz)
+            const freq = isLeft ? 440 : 880; 
             
             if (!isLeft) {
-                // DOBLE BIP para la DERECHA (patrón rítmico distintivo)
                 playTone(freq, pan, 0.0, 0.08);
                 setTimeout(() => playTone(freq, pan, 0.0, 0.08), 120);
             } else {
-                // BIP ÚNICO y más largo para la IZQUIERDA
                 playTone(freq, pan, 0.0, 0.2);
             }
         }
@@ -126,10 +148,8 @@
 
             osc.type = 'sine';
             osc.frequency.setValueAtTime(freq, startTime);
-
             gain.gain.setValueAtTime(0.35, startTime);
             gain.gain.exponentialRampToValueAtTime(0.01, startTime + duration);
-
             osc.connect(gain);
 
             if (panner) {
@@ -144,9 +164,9 @@
             osc.stop(startTime + duration);
         }
 
-        function speak(text) {
+        function speak(text, force = false) {
             if ('speechSynthesis' in window) {
-                window.speechSynthesis.cancel();
+                if (force) window.speechSynthesis.cancel();
                 const utterance = new SpeechSynthesisUtterance(text);
                 utterance.lang = 'es-ES';
                 utterance.rate = 1.2;
@@ -161,7 +181,8 @@
                 loadingText.innerText = "Sistema preparado.";
                 startBtn.style.display = 'inline-block';
                 exploreBtn.style.display = 'inline-block';
-                speak("Sistema listo. Seleccione modo marcha o exploración.");
+                stopBtn.style.display = 'inline-block';
+                speak("Sistema listo. Seleccione modo marcha o exploración continua.");
             } catch (error) {
                 loadingText.innerText = "Error al iniciar modelos.";
             }
@@ -183,86 +204,122 @@
             }
         }
 
+        setRouteBtn.addEventListener('click', () => {
+            const dest = destinationInput.value.trim();
+            if (dest) {
+                targetDestination = dest;
+                routeStatus.innerText = `Destino: ${dest}`;
+                speak(`Ruta establecida hacia ${dest}.`);
+            } else {
+                speak("Por favor, ingrese un destino válido.");
+            }
+        });
+
+        if ("geolocation" in navigator) {
+            navigator.geolocation.watchPosition(
+                (position) => {
+                    currentPosition = { lat: position.coords.latitude, lon: position.coords.longitude };
+                },
+                (error) => { console.error("GPS error", error); },
+                { enableHighAccuracy: true, maximumAge: 10000, timeout: 5000 }
+            );
+        }
+
+        // Botón Detener Todo
+        stopBtn.addEventListener('click', () => {
+            currentMode = "IDLE";
+            modeStatus.innerText = "Modo: Detenido";
+            window.speechSynthesis.cancel();
+            speak("Sistema en pausa.", true);
+        });
+
         // 1. MODO MARCHA
         startBtn.addEventListener('click', async () => {
             initAudioContext();
             await startCamera();
-            isWalking = true;
-            modeStatus.innerText = "Modo: Marcha (Silencio / Alerta)";
-            speak("Modo marcha activado. Camino despejado.", true);
+            currentMode = "WALKING";
+            modeStatus.innerText = "Modo: Marcha y Ruta Activa";
+            speak("Modo marcha activado.", true);
 
-            runObstacleDetectionLoop();
+            mainLoop();
         });
 
-        async function runObstacleDetectionLoop() {
-            if (!isWalking) return;
+        // 2. MODO EXPLORACIÓN CONTINUA
+        exploreBtn.addEventListener('click', async () => {
+            initAudioContext();
+            await startCamera();
+            currentMode = "EXPLORING";
+            modeStatus.innerText = "Modo: Exploración Continua";
+            lastSpokenExploreObject = "";
+            speak("Modo exploración continua activado. Mueva la cámara lentamente.", true);
+
+            mainLoop();
+        });
+
+        // Bucle centralizador de inteligencia artificial según el modo activo
+        async function mainLoop() {
+            if (currentMode === "IDLE") return;
 
             if (cocoModel && videoElement.readyState === 4) {
                 try {
                     const predictions = await cocoModel.detect(videoElement);
-                    const relevantObstacles = predictions.filter(p => p.score > 0.55);
-                    
-                    if (relevantObstacles.length > 0) {
-                        const closest = relevantObstacles.reduce((prev, curr) => (prev.bbox[1] > curr.bbox[1]) ? prev : curr);
-                        
-                        const videoWidth = videoElement.videoWidth || 640;
-                        const objectX = closest.bbox[0] + (closest.bbox[2] / 2);
-                        const normalizedPan = (objectX / videoWidth) * 2 - 1;
 
-                        const now = Date.now();
-                        if (now - lastAlertTime > 1200) {
-                            playDistinctSpatialAlert(normalizedPan);
+                    if (currentMode === "WALKING") {
+                        // Lógica de obstáculos para marcha
+                        const relevantObstacles = predictions.filter(p => p.score > 0.55);
+                        if (relevantObstacles.length > 0) {
+                            const closest = relevantObstacles.reduce((prev, curr) => (prev.bbox[1] > curr.bbox[1]) ? prev : curr);
+                            const videoWidth = videoElement.videoWidth || 640;
+                            const objectX = closest.bbox[0] + (closest.bbox[2] / 2);
+                            const normalizedPan = (objectX / videoWidth) * 2 - 1;
 
-                            if (normalizedPan < -0.25) {
-                                speak("Desviar a la derecha");
-                            } else if (normalizedPan > 0.25) {
-                                speak("Desviar a la izquierda");
-                            } else {
-                                speak("Obstáculo al frente");
+                            const now = Date.now();
+                            if (now - lastAlertTime > 1200) {
+                                playDistinctSpatialAlert(normalizedPan);
+                                if (normalizedPan < -0.25) speak("Desviar a la derecha");
+                                else if (normalizedPan > 0.25) speak("Desviar a la izquierda");
+                                else speak("Obstáculo al frente");
+                                lastAlertTime = now;
                             }
-
-                            lastAlertTime = now;
+                            aiStatus.innerText = `Obstáculo (${normalizedPan < 0 ? 'Izquierda' : 'Derecha'})`;
+                        } else {
+                            aiStatus.innerText = "Camino despejado";
                         }
-                        aiStatus.innerText = `Obstáculo detectado (${normalizedPan < 0 ? 'Izquierda' : 'Derecha'})`;
-                    } else {
-                        aiStatus.innerText = "Camino despejado";
+                    } 
+                    else if (currentMode === "EXPLORING") {
+                        // Lógica de exploración continua
+                        if (predictions.length > 0) {
+                            const top = predictions.reduce((prev, current) => (prev.score > current.score) ? prev : current);
+                            if (top.score > 0.60) {
+                                const translated = translateClass(top.class);
+                                
+                                const videoWidth = videoElement.videoWidth || 640;
+                                const objectX = top.bbox[0] + (top.bbox[2] / 2);
+                                const pan = (objectX / videoWidth) * 2 - 1;
+
+                                // Si el objeto detectado cambia respecto al anterior que se nombró, avisa de inmediato
+                                if (translated !== lastSpokenExploreObject) {
+                                    playDistinctSpatialAlert(pan);
+                                    speak(translated);
+                                    lastSpokenExploreObject = translated;
+                                }
+                                aiStatus.innerText = `Explorando: ${translated}`;
+                            }
+                        } else {
+                            aiStatus.innerText = "Explorando: Buscando objetos...";
+                            lastSpokenExploreObject = ""; // Resetea para cuando aparezca algo nuevo
+                        }
                     }
-                } catch (e) {
-                    console.error(e);
+                } catch (err) {
+                    console.error("Error en bucle de IA:", err);
                 }
             }
 
-            if (isWalking) {
-                setTimeout(runObstacleDetectionLoop, 500);
+            // Continuar el bucle según el estado actual
+            if (currentMode !== "IDLE") {
+                setTimeout(mainLoop, currentMode === "WALKING" ? 500 : 1000);
             }
         }
-
-        // 2. MODO EXPLORACIÓN
-        exploreBtn.addEventListener('click', async () => {
-            initAudioContext();
-            isWalking = false; 
-            modeStatus.innerText = "Modo: Exploración puntual";
-            speak("Modo exploración. Apunte a un objeto.", true);
-            await startCamera();
-
-            if (cocoModel && videoElement.readyState === 4) {
-                const predictions = await cocoModel.detect(videoElement);
-                if (predictions.length > 0) {
-                    const top = predictions[0];
-                    const translated = translateClass(top.class);
-                    
-                    const videoWidth = videoElement.videoWidth || 640;
-                    const objectX = top.bbox[0] + (top.bbox[2] / 2);
-                    const pan = (objectX / videoWidth) * 2 - 1;
-
-                    playDistinctSpatialAlert(pan);
-                    setTimeout(() => speak(translated), 250);
-                    aiStatus.innerText = `Identificado: ${translated}`;
-                } else {
-                    speak("No se reconoce ningún objeto claro frente a ti.");
-                }
-            }
-        });
 
         function translateClass(className) {
             const translations = {
@@ -270,20 +327,11 @@
                 'bicycle': 'Bicicleta',
                 'car': 'Auto',
                 'chair': 'Silla',
-                'potted plant': 'Planta o matera',
+                'potted plant': 'Planta',
                 'backpack': 'Mochila o bulto',
                 'dog': 'Perro'
             };
-            return translations[className] || 'Objeto al frente';
-        }
-
-        if (window.DeviceMotionEvent) {
-            window.addEventListener('devicemotion', (event) => {
-                const acc = event.accelerationIncludingGravity;
-                if (acc && acc.x !== null) {
-                    motionStatus.innerText = `Movimiento OK (X:${acc.x.toFixed(1)})`;
-                }
-            });
+            return translations[className] || className;
         }
     </script>
 </body>
